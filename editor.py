@@ -1,12 +1,9 @@
 import sys
 import subprocess
-import tempfile
-import shutil
 from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QSlider, QFileDialog,
-                             QLabel, QStyle, QSizePolicy, QFrame,
-                             QMessageBox, QProgressDialog, QDialog)
+                             QLabel, QStyle, QSizePolicy, QFrame)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtCore import Qt, QUrl, QSize
@@ -101,12 +98,6 @@ class VideoEditor(QMainWindow):
         self.segments = []
         self.video_path = None
         self.frame_ms = int(1000 / 30)  # default; updated once video metadata loads
-
-        # OneDrive state
-        self.is_onedrive = False
-        self.onedrive_client = None
-        self.onedrive_parent_id = None
-        self.stream_url = None
 
         self.setStyleSheet(STYLESHEET)
 
@@ -204,57 +195,14 @@ class VideoEditor(QMainWindow):
         self.media_player.mediaStatusChanged.connect(self.on_media_status_changed)
     
     def load_video(self):
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Open Video")
-        msg.setText("Where would you like to open a video from?")
-        local_btn = msg.addButton("📂  Local File", QMessageBox.ButtonRole.AcceptRole)
-        onedrive_btn = msg.addButton("☁️  OneDrive", QMessageBox.ButtonRole.AcceptRole)
-        msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
-
-        clicked = msg.clickedButton()
-        if clicked == local_btn:
-            self._load_local()
-        elif clicked == onedrive_btn:
-            self._load_onedrive()
-
-    def _load_local(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Select Video File", "", "Video Files (*.mp4 *.avi *.mov *.mkv)"
         )
+        
         if file_path:
             self.video_path = file_path
-            self.is_onedrive = False
             self.media_player.setSource(QUrl.fromLocalFile(file_path))
-
-    def _load_onedrive(self):
-        try:
-            from config import AZURE_CLIENT_ID
-            if AZURE_CLIENT_ID == "YOUR_CLIENT_ID_HERE":
-                QMessageBox.warning(
-                    self, "Not Configured",
-                    "Please set AZURE_CLIENT_ID in config.py first.\n"
-                    "Open config.py for step-by-step instructions."
-                )
-                return
-
-            from onedrive import OneDriveClient
-            from onedrive_browser import OneDriveBrowser
-
-            client = OneDriveClient(AZURE_CLIENT_ID)
-            client.authenticate()
-
-            browser = OneDriveBrowser(client, self)
-            if browser.exec() == QDialog.DialogCode.Accepted and browser.selected_item:
-                item = browser.selected_item
-                self.onedrive_client = client
-                self.onedrive_parent_id = item["parent_id"]
-                self.video_path = item["name"]
-                self.is_onedrive = True
-                self.stream_url = client.get_download_url(item["id"])
-                self.media_player.setSource(QUrl(self.stream_url))
-        except Exception as e:
-            QMessageBox.critical(self, "OneDrive Error", str(e))
+            self.play_button.setEnabled(True)
     
     def play_pause(self):
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -349,82 +297,43 @@ class VideoEditor(QMainWindow):
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
-        """On close, slice video into clips; upload to OneDrive if in cloud mode."""
-        # Auto-close any open segment at the end of the video
-        total_duration = self.media_player.duration()
+        """On close, slice the video into clips using ffmpeg based on recorded segments."""
+        # Close any open segment at the end of the video
+        duration = self.media_player.duration()
         for segment in self.segments:
             if segment["stop"] is None:
-                segment["stop"] = total_duration
-                print(f"Auto-closed open segment at {self.format_time(total_duration)}")
+                segment["stop"] = duration
+                print(f"Auto-closed open segment at {self.format_time(duration)}")
 
         complete_segments = [s for s in self.segments if s["stop"] is not None]
 
         if complete_segments and self.video_path:
-            video_stem = Path(self.video_path).stem
+            video_path = Path(self.video_path)
+            output_dir = video_path.parent / f"{video_path.stem}_clips"
+            output_dir.mkdir(exist_ok=True)
 
-            if self.is_onedrive:
-                output_dir = Path(tempfile.mkdtemp())
-                video_input = self.stream_url
-            else:
-                video_path_obj = Path(self.video_path)
-                output_dir = video_path_obj.parent / f"{video_stem}_clips"
-                output_dir.mkdir(exist_ok=True)
-                video_input = str(video_path_obj)
-
-            clip_files = []
             for i, segment in enumerate(complete_segments):
                 start_sec = segment["start"] / 1000.0
                 stop_sec = segment["stop"] / 1000.0
-                clip_duration = stop_sec - start_sec
-                clip_name = f"{video_stem}_cut_{i + 1:02d}.mp4"
-                output_file = output_dir / clip_name
+                duration = stop_sec - start_sec
+
+                output_file = output_dir / f"{video_path.stem}_cut_{i + 1:02d}.mp4"
 
                 cmd = [
                     "ffmpeg", "-y",
                     "-ss", str(start_sec),
-                    "-i", video_input,
-                    "-t", str(clip_duration),
+                    "-i", str(video_path),
+                    "-t", str(duration),
                     "-c", "copy",
                     str(output_file)
                 ]
+
                 print(f"Exporting clip {i + 1}: {self.format_time(segment['start'])} → {self.format_time(segment['stop'])}")
                 subprocess.run(cmd, check=True)
-                clip_files.append((clip_name, output_file))
 
-            if self.is_onedrive:
-                self._upload_clips_to_onedrive(clip_files, video_stem, output_dir)
-            else:
-                print(f"\nAll clips saved to: {output_dir}")
+            print(f"\nAll clips saved to: {output_dir}")
 
         event.accept()
-
-    def _upload_clips_to_onedrive(self, clip_files, video_stem, tmp_dir):
-        """Upload exported clips to a new OneDrive folder, then clean up temp files."""
-        try:
-            folder_id = self.onedrive_client.create_folder(
-                self.onedrive_parent_id, f"{video_stem}_clips"
-            )
-            progress = QProgressDialog(
-                "Uploading clips to OneDrive...", "Cancel", 0, len(clip_files), self
-            )
-            progress.setWindowTitle("Uploading")
-            progress.setWindowModality(Qt.WindowModality.WindowModal)
-            progress.show()
-
-            for i, (clip_name, clip_path) in enumerate(clip_files):
-                if progress.wasCanceled():
-                    break
-                progress.setLabelText(f"Uploading {clip_name}  ({i + 1} / {len(clip_files)})")
-                progress.setValue(i)
-                QApplication.processEvents()
-                self.onedrive_client.upload_file(folder_id, clip_name, clip_path)
-
-            progress.setValue(len(clip_files))
-            print(f"All clips uploaded to OneDrive: {video_stem}_clips/")
-        except Exception as e:
-            QMessageBox.critical(self, "Upload Error", f"Failed to upload clips:\n{e}")
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def main():
