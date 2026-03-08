@@ -1,13 +1,12 @@
 import sys
 import subprocess
 from pathlib import Path
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QSlider, QFileDialog,
-                             QLabel, QStyle, QSizePolicy, QFrame)
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtMultimediaWidgets import QVideoWidget
-from PyQt6.QtCore import Qt, QUrl, QSize
-from PyQt6.QtGui import QFont
+                             QLabel, QStyle, QSizePolicy)
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+from PyQt5.QtMultimediaWidgets import QVideoWidget
+from PyQt5.QtCore import Qt, QUrl, QSize
 
 
 STYLESHEET = """
@@ -98,6 +97,7 @@ class VideoEditor(QMainWindow):
         self.segments = []
         self.video_path = None
         self.frame_ms = int(1000 / 30)  # default; updated once video metadata loads
+        self._scrubbing = False  # True while the user is dragging the slider
 
         self.setStyleSheet(STYLESHEET)
 
@@ -118,13 +118,11 @@ class VideoEditor(QMainWindow):
         # Video widget — takes all available vertical space
         self.video_widget = QVideoWidget()
         self.video_widget.setObjectName("video_widget")
-        self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.video_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.video_widget, stretch=1)
 
         # Media player setup
-        self.media_player = QMediaPlayer()
-        self.audio_output = QAudioOutput()
-        self.media_player.setAudioOutput(self.audio_output)
+        self.media_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
         self.media_player.setVideoOutput(self.video_widget)
 
         # ── Bottom control bar ──────────────────────────────────────────────
@@ -136,8 +134,10 @@ class VideoEditor(QMainWindow):
         bar_layout.setSpacing(8)
 
         # Time slider
-        self.time_slider = QSlider(Qt.Orientation.Horizontal)
-        self.time_slider.sliderMoved.connect(self.set_position)
+        self.time_slider = QSlider(Qt.Horizontal)
+        self.time_slider.sliderPressed.connect(self._on_slider_pressed)
+        self.time_slider.sliderReleased.connect(self._on_slider_released)
+        self.time_slider.sliderMoved.connect(self._on_slider_moved)
         bar_layout.addWidget(self.time_slider)
 
         # Row: time label + buttons
@@ -155,7 +155,7 @@ class VideoEditor(QMainWindow):
         # Play/Pause button (round, icon-only)
         self.play_button = QPushButton()
         self.play_button.setObjectName("play_button")
-        self.play_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.play_button.setIconSize(QSize(22, 22))
         self.play_button.setFixedSize(42, 42)
         self.play_button.clicked.connect(self.play_pause)
@@ -164,19 +164,19 @@ class VideoEditor(QMainWindow):
         row.addStretch()
 
         # Segment buttons (right-aligned)
-        self.start_button = QPushButton("▶  Start")
+        self.start_button = QPushButton(u"\u25b6  Start")
         self.start_button.setObjectName("start_button")
         self.start_button.setFixedHeight(36)
         self.start_button.clicked.connect(self.on_start)
         row.addWidget(self.start_button)
 
-        self.stop_and_start_button = QPushButton("⏭  Stop & Start")
+        self.stop_and_start_button = QPushButton(u"\u23ed  Stop & Start")
         self.stop_and_start_button.setObjectName("stop_and_start_button")
         self.stop_and_start_button.setFixedHeight(36)
         self.stop_and_start_button.clicked.connect(self.on_stop_and_start)
         row.addWidget(self.stop_and_start_button)
 
-        self.stop_button = QPushButton("■  Stop")
+        self.stop_button = QPushButton(u"\u25a0  Stop")
         self.stop_button.setObjectName("stop_button")
         self.stop_button.setFixedHeight(36)
         self.stop_button.clicked.connect(self.on_stop)
@@ -201,37 +201,48 @@ class VideoEditor(QMainWindow):
         
         if file_path:
             self.video_path = file_path
-            self.media_player.setSource(QUrl.fromLocalFile(file_path))
-            self.play_button.setEnabled(True)
+            self.media_player.setMedia(QMediaContent(QUrl.fromLocalFile(file_path)))
     
     def play_pause(self):
-        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+        if self.media_player.state() == QMediaPlayer.PlayingState:
             self.media_player.pause()
-            self.play_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         else:
             self.media_player.play()
-            self.play_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
     
+    def _on_slider_pressed(self):
+        self._scrubbing = True
+
+    def _on_slider_released(self):
+        self.media_player.setPosition(self.time_slider.value())
+        self._scrubbing = False
+
+    def _on_slider_moved(self, position):
+        """Update the time label while dragging without seeking yet."""
+        self.update_time_label(position, self.media_player.duration())
+
     def set_position(self, position):
         self.media_player.setPosition(position)
     
     def position_changed(self, position):
-        self.time_slider.setValue(position)
+        if not self._scrubbing:
+            self.time_slider.setValue(position)
         self.update_time_label(position, self.media_player.duration())
     
     def duration_changed(self, duration):
         self.time_slider.setRange(0, duration)
     
     def update_time_label(self, position, duration):
-        position_time = self.format_time(position)
-        duration_time = self.format_time(duration)
-        self.time_label.setText(f"{position_time} / {duration_time}")
-    
+        self.time_label.setText(
+            "{} / {}".format(self.format_time(position), self.format_time(duration))
+        )
+
     def format_time(self, milliseconds):
         seconds = milliseconds // 1000
         minutes = seconds // 60
         seconds = seconds % 60
-        return f"{minutes:02d}:{seconds:02d}"
+        return "{:02d}:{:02d}".format(minutes, seconds)
     
     def _update_button_state(self):
         """Show Start XOR (Stop and Start + Stop) depending on recording state."""
@@ -245,7 +256,7 @@ class VideoEditor(QMainWindow):
         self.segments.append({"start": current_time, "stop": None})
         self.is_recording = True
         self._update_button_state()
-        print(f"Start point added at {self.format_time(current_time)}")
+        print("Start point added at {}".format(self.format_time(current_time)))
 
     def on_stop(self):
         """Close the current segment — switches back to Start button."""
@@ -259,7 +270,7 @@ class VideoEditor(QMainWindow):
         current_time = self.media_player.position()
         self._close_current_segment(current_time)
         self.segments.append({"start": current_time, "stop": None})
-        print(f"New start point added at {self.format_time(current_time)}")
+        print("New start point added at {}".format(self.format_time(current_time)))
         # Stays in recording state — buttons don't change
 
     def _close_current_segment(self, current_time):
@@ -267,34 +278,41 @@ class VideoEditor(QMainWindow):
         for segment in reversed(self.segments):
             if segment["stop"] is None:
                 segment["stop"] = current_time
-                print(f"Stop point added at {self.format_time(current_time)}")
+                print("Stop point added at {}".format(self.format_time(current_time)))
                 return
         print("Warning: no open segment to close")
     
     def on_media_status_changed(self, status):
-        """Once the video is loaded, read its frame rate from metadata."""
-        if status == QMediaPlayer.MediaStatus.LoadedMedia:
-            from PyQt6.QtMultimedia import QMediaMetaData
-            fps = self.media_player.metaData().value(QMediaMetaData.Key.VideoFrameRate)
+        """Once the video is loaded, read its frame rate and show the first frame."""
+        if status == QMediaPlayer.LoadedMedia:
+            fps = self.media_player.metaData("VideoFrameRate")
             if fps and fps > 0:
                 self.frame_ms = int(1000 / fps)
-                print(f"Detected frame rate: {fps:.2f} fps ({self.frame_ms} ms/frame)")
+                print("Detected frame rate: {:.2f} fps ({} ms/frame)".format(fps, self.frame_ms))
             else:
                 print("Frame rate not found in metadata, using 30 fps default")
 
+            # Play then immediately pause so the first frame is rendered
+            self.media_player.play()
+            self.media_player.pause()
+            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+
     def keyPressEvent(self, event):
         """Left/right arrow keys step one frame backward/forward."""
-        if event.key() == Qt.Key.Key_Right:
+        if event.key() == Qt.Key_Right:
             self.media_player.pause()
-            self.play_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-            self.media_player.setPosition(min(self.media_player.position() + self.frame_ms,
-                                              self.media_player.duration()))
-        elif event.key() == Qt.Key.Key_Left:
+            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self.media_player.setPosition(
+                min(self.media_player.position() + self.frame_ms, self.media_player.duration())
+            )
+        elif event.key() == Qt.Key_Left:
             self.media_player.pause()
-            self.play_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-            self.media_player.setPosition(max(self.media_player.position() - self.frame_ms, 0))
+            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self.media_player.setPosition(
+                max(self.media_player.position() - self.frame_ms, 0)
+            )
         else:
-            super().keyPressEvent(event)
+            super(VideoEditor, self).keyPressEvent(event)
 
     def closeEvent(self, event):
         """On close, slice the video into clips using ffmpeg based on recorded segments."""
@@ -303,35 +321,39 @@ class VideoEditor(QMainWindow):
         for segment in self.segments:
             if segment["stop"] is None:
                 segment["stop"] = duration
-                print(f"Auto-closed open segment at {self.format_time(duration)}")
+                print("Auto-closed open segment at {}".format(self.format_time(duration)))
 
         complete_segments = [s for s in self.segments if s["stop"] is not None]
 
         if complete_segments and self.video_path:
             video_path = Path(self.video_path)
-            output_dir = video_path.parent / f"{video_path.stem}_clips"
+            output_dir = video_path.parent / "{}_clips".format(video_path.stem)
             output_dir.mkdir(exist_ok=True)
 
             for i, segment in enumerate(complete_segments):
                 start_sec = segment["start"] / 1000.0
                 stop_sec = segment["stop"] / 1000.0
-                duration = stop_sec - start_sec
+                clip_duration = stop_sec - start_sec
 
-                output_file = output_dir / f"{video_path.stem}_cut_{i + 1:02d}.mp4"
+                output_file = output_dir / "{}_cut_{:02d}.mp4".format(video_path.stem, i + 1)
 
                 cmd = [
                     "ffmpeg", "-y",
                     "-ss", str(start_sec),
                     "-i", str(video_path),
-                    "-t", str(duration),
+                    "-t", str(clip_duration),
                     "-c", "copy",
                     str(output_file)
                 ]
 
-                print(f"Exporting clip {i + 1}: {self.format_time(segment['start'])} → {self.format_time(segment['stop'])}")
+                print("Exporting clip {}: {} -> {}".format(
+                    i + 1,
+                    self.format_time(segment["start"]),
+                    self.format_time(segment["stop"])
+                ))
                 subprocess.run(cmd, check=True)
 
-            print(f"\nAll clips saved to: {output_dir}")
+            print("\nAll clips saved to: {}".format(output_dir))
 
         event.accept()
 
@@ -340,7 +362,7 @@ def main():
     app = QApplication(sys.argv)
     editor = VideoEditor()
     editor.show()
-    sys.exit(app.exec())
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
