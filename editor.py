@@ -288,7 +288,9 @@ class VideoEditor(QMainWindow):
 
     def _handle_player_error(self):
         self.play_button.setEnabled(False)
-        err_msg = "Error: " + self.media_player.errorString()
+        error_string = self.media_player.errorString()
+        error_code = self.media_player.error()
+        err_msg = "Error (Code {}): {}".format(error_code, error_string)
         print(err_msg, file=sys.stderr)
         QMessageBox.critical(self, "Player Error", err_msg)
     
@@ -405,6 +407,10 @@ class VideoEditor(QMainWindow):
     
     def on_media_status_changed(self, status):
         """Once the video is loaded, read its frame rate and show the first frame."""
+        print("Media status changed to: {}".format(status))
+        if status == QMediaPlayer.InvalidMedia:
+            print("Error: Invalid Media - Format might not be supported")
+        
         if status == QMediaPlayer.LoadedMedia:
             fps = self.media_player.metaData("VideoFrameRate")
             if fps and fps > 0:
