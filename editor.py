@@ -134,7 +134,8 @@ class ExportWorker(QObject):
                 "-ss", str(start_sec),
                 "-i", str(self.video_path),
                 "-t", str(clip_duration),
-                "-map", "0",
+                "-map", "0:v",
+                "-map", "0:a?",
                 "-c", "copy",
                 str(output_file)
             ]
