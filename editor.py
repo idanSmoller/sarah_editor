@@ -83,6 +83,11 @@ STYLESHEET = """
         font-weight: bold;
     }
     QPushButton#stop_button:hover { background-color: #d93025; }
+    QPushButton#undo_button {
+        background-color: #555555;
+        border-color: #555555;
+    }
+    QPushButton#undo_button:hover { background-color: #666666; }
     QLabel#time_label {
         color: #aaaaaa;
         font-size: 12px;
@@ -346,6 +351,15 @@ class VideoEditor(QMainWindow):
         self.stop_button.clicked.connect(self.on_stop)
         row.addWidget(self.stop_button)
 
+        row.addStretch()
+
+        self.undo_button = QPushButton(u"\u21ba Undo")
+        self.undo_button.setObjectName("undo_button")
+        self.undo_button.setFixedHeight(36)
+        self.undo_button.setToolTip("Remove the last segment")
+        self.undo_button.clicked.connect(self.on_undo)
+        row.addWidget(self.undo_button)
+
         bar_layout.addLayout(row)
         layout.addWidget(control_bar)
 
@@ -518,6 +532,28 @@ class VideoEditor(QMainWindow):
         # Save progress after every stop action
         self.save_state()
 
+    def on_undo(self):
+        """Removes the last segment (or cancels current recording)."""
+        if not self.segments:
+            print("Undo: No segments to undo.")
+            return
+
+        last_seg = self.segments.pop()
+        
+        if last_seg.get("stop") is None:
+            # We were recording, so we cancel the start
+            print("Undo: Cancelled current recording starting at {}".format(self.format_time(last_seg["start"])))
+            self.is_recording = False
+        else:
+            # We removed a completed segment
+            print("Undo: Removed segment starting at {}".format(
+                self.format_time(last_seg["start"])
+            ))
+
+        self._update_button_state()
+        self.segment_bar.set_data(self.segments, self.media_player.duration())
+        self.save_state()
+
 
     def on_stop_and_start(self):
         """Close the current segment and immediately open a new one."""
@@ -676,8 +712,8 @@ class VideoEditor(QMainWindow):
             else:
                 print("Skipping invalid segment: {} -> {}".format(start, stop))
 
-        # Sort segments by start time
-        complete_segments.sort(key=lambda s: s["start"])
+        # Sort segments by start time (REMOVED: User requested order of creation)
+        # complete_segments.sort(key=lambda s: s["start"])
 
         return complete_segments
 
