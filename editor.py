@@ -208,7 +208,11 @@ class ExportWorker(QObject):
                 "-t", str(clip_duration),
                 "-map", "0:v",
                 "-map", "0:a?",
+                # Use copy mode but enforce timestamp reset to fix playback issues
                 "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
+                # Move moov atom to start for better compatibility
+                "-movflags", "+faststart",
                 str(output_file)
             ]
 
@@ -685,7 +689,7 @@ class VideoEditor(QMainWindow):
 
         event.ignore()
         self._close_after_export = True
-        self.delete_state()
+        # State deletion moved to _on_export_finished to ensure it's only deleted after success
         self._start_export(complete_segments)
 
 
@@ -844,6 +848,9 @@ class VideoEditor(QMainWindow):
                 "Export completed",
                 "All clips exported successfully.\nSaved to:\n{}".format(output_dir)
             )
+            # Only delete the state file if export was completely successful and we are closing
+            if self._close_after_export:
+                self.delete_state()
 
         if self._close_after_export:
             self._allow_close = True
