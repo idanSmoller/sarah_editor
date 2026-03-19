@@ -4,6 +4,7 @@ import shutil
 import traceback
 import platform
 import json
+import csv
 from pathlib import Path
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QSlider, QFileDialog,
@@ -323,15 +324,39 @@ class VideoEditor(QMainWindow):
                 if reply == QMessageBox.Yes:
                     try:
                         with open(json_path, 'r') as f:
-                            self.segments = json.load(f)
+                            data = json.load(f)
+                            
+                        # Handle old format (list) vs new format (dict)
+                        if isinstance(data, list):
+                            self.segments = data
+                        elif isinstance(data, dict):
+                            self.segments = data.get("segments", [])
+                        else:
+                            self.segments = []
+
                         print("Loaded {} segments from backup.".format(len(self.segments)))
 
-                        # Proceed immediately to export
-                        self.immediate_export = True
-                        self._close_after_export = True
+                        # Just load into editor and let user continue
+                        self.immediate_export = False
                         
-                        # Use QTimer to ensure the export call is made after the constructor finishes
-                        QTimer.singleShot(0, lambda: self._start_export(self.segments))
+                        # Refresh UI state (button visibility, etc.)
+                        if self.segments and self.segments[-1]["stop"] is None:
+                            self.is_recording = True
+                        self._update_button_state()
+                        
+                        # Set position to the end of the last recorded slice
+                        if self.segments:
+                            last_segment = self.segments[-1]
+                            target_pos = 0
+                            if last_segment.get("stop") is not None:
+                                target_pos = last_segment["stop"]
+                            elif last_segment.get("start") is not None:
+                                target_pos = last_segment["start"]
+                            
+                            if target_pos > 0:
+                                # We need to delay setting position slightly to ensure media is loaded
+                                QTimer.singleShot(500, lambda: self.media_player.setPosition(target_pos))
+                            
                     except Exception as e:
                         QMessageBox.warning(self, "Load Error", "Failed to load splits: " + str(e))
     
@@ -375,6 +400,14 @@ class VideoEditor(QMainWindow):
         minutes = seconds // 60
         seconds = seconds % 60
         return "{:02d}:{:02d}".format(minutes, seconds)
+
+    def format_time_hms(self, milliseconds):
+        """Format milliseconds as H:MM:SS for Google Sheets."""
+        total_seconds = milliseconds // 1000
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        return "{:d}:{:02d}:{:02d}".format(hours, minutes, seconds)
     
     def _update_button_state(self):
         """Show Start XOR (Stop and Start + Stop) depending on recording state."""
@@ -396,6 +429,10 @@ class VideoEditor(QMainWindow):
         self._close_current_segment(current_time)
         self.is_recording = False
         self._update_button_state()
+
+        # Save progress after every stop action
+        self.save_state()
+
 
     def on_stop_and_start(self):
         """Close the current segment and immediately open a new one."""
@@ -450,8 +487,38 @@ class VideoEditor(QMainWindow):
         else:
             super(VideoEditor, self).keyPressEvent(event)
 
+    def save_state(self):
+        if not self.video_path:
+            return False
+            
+        data = {
+            "segments": self.segments
+        }
+        
+        try:
+            json_path = self.video_path.with_name(self.video_path.stem + "_splits.json")
+            with open(json_path, 'w') as f:
+                json.dump(data, f, indent=4)
+            print("Saved state to {}".format(json_path))
+            return True
+        except Exception as e:
+            print("Failed to save state: {}".format(e), file=sys.stderr)
+            return False
+            
+    def delete_state(self):
+        if not self.video_path:
+            return
+        
+        try:
+            json_path = self.video_path.with_name(self.video_path.stem + "_splits.json")
+            if json_path.exists():
+                json_path.unlink()
+                print("Deleted state file: {}".format(json_path))
+        except Exception as e:
+            print("Failed to delete state file: {}".format(e), file=sys.stderr)
+
     def closeEvent(self, event):
-        """On close, export segments in a background thread for stability."""
+        """On close, ask user if they want to finish (export) or continue later (save)."""
         if self._allow_close:
             event.accept()
             return
@@ -461,18 +528,50 @@ class VideoEditor(QMainWindow):
             QMessageBox.information(self, "Export in progress", "Please wait for export to finish.")
             return
 
+        # If no video loaded or no segments, just close
+        if not self.video_path or not self.segments:
+            event.accept()
+            return
+            
+        # Ask user what to do
+        reply = QMessageBox.question(
+            self,
+            "Video Editor",
+            "Are you done with the video?\n\n"
+            "Yes: Finish and export clips now. (Deletes saved progress)\n"
+            "No: Save progress and continue later.",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+        )
+        
+        if reply == QMessageBox.Cancel:
+            event.ignore()
+            return
+            
+        if reply == QMessageBox.No:
+            # Continue Later: Save progress and close
+            self.save_state()
+            self._allow_close = True
+            event.accept()
+            return
+            
+        # If Yes (Finished): Delete progress file and Export
         complete_segments = self._finalize_segments_for_export()
-        if not complete_segments or not self.video_path:
+        
+        if not complete_segments:
+            # Maybe user clicked finish but there are no valid segments?
             event.accept()
             return
 
         event.ignore()
         self._close_after_export = True
+        self.delete_state()
         self._start_export(complete_segments)
+
 
     def _finalize_segments_for_export(self):
         duration = max(0, self.media_player.duration())
 
+        # Close any open segments so they can be exported
         for segment in self.segments:
             if segment["stop"] is None:
                 segment["stop"] = duration
@@ -480,6 +579,7 @@ class VideoEditor(QMainWindow):
 
         complete_segments = []
         for segment in self.segments:
+            # Skip segments that are not valid duration
             if segment["stop"] is None:
                 continue
 
@@ -490,6 +590,9 @@ class VideoEditor(QMainWindow):
                 complete_segments.append({"start": start, "stop": stop})
             else:
                 print("Skipping invalid segment: {} -> {}".format(start, stop))
+
+        # Sort segments by start time
+        complete_segments.sort(key=lambda s: s["start"])
 
         return complete_segments
 
@@ -502,21 +605,15 @@ class VideoEditor(QMainWindow):
         video_path = Path(self.video_path)
         output_dir = video_path.parent / "{}_clips".format(video_path.stem)
 
-        # Save splits to JSON for backup
-        try:
-            json_path = video_path.with_name(video_path.stem + "_splits.json")
-            with open(json_path, 'w') as f:
-                json.dump(complete_segments, f, indent=4)
-            print("Saved splits backup to {}".format(json_path))
-        except Exception as e:
-            print("Failed to save splits backup: {}".format(e), file=sys.stderr)
-
         try:
             output_dir.mkdir(exist_ok=True)
         except Exception as err:
             QMessageBox.critical(self, "Output folder error", "Could not create output folder:\n{}".format(err))
             self._close_after_export = False
             return
+
+        # Save CSV report for Google Sheets
+        self._save_csv_report(video_path, output_dir, complete_segments)
 
         if not self._has_enough_disk_space(video_path, output_dir, complete_segments):
             QMessageBox.warning(
@@ -555,6 +652,28 @@ class VideoEditor(QMainWindow):
         self._export_thread.finished.connect(self._export_thread.deleteLater)
 
         self._export_thread.start()
+
+    def _save_csv_report(self, video_path, output_dir, complete_segments):
+        """Generates a CSV report for Google Sheets ingestion."""
+        try:
+            csv_path = output_dir / "{}_report.csv".format(video_path.stem)
+            # Use newline='' for csv module to avoid extra blank lines on Windows
+            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                # Header row
+                writer.writerow(["Clip Name", "Start Time", "End Time"])
+                
+                for i, segment in enumerate(complete_segments, start=1):
+                    # Replicate filename logic from ExportWorker
+                    clip_name = "{}_cut_{:02d}{}".format(video_path.stem, i, video_path.suffix)
+                    start_str = self.format_time_hms(segment["start"])
+                    stop_str = self.format_time_hms(segment["stop"])
+                    
+                    writer.writerow([clip_name, start_str, stop_str])
+            
+            print("Saved CSV report to {}".format(csv_path))
+        except Exception as e:
+            print("Failed to save CSV report: {}".format(e), file=sys.stderr)
 
     def _has_enough_disk_space(self, video_path, output_dir, complete_segments):
         try:
