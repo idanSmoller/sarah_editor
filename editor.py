@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 from PyQt5.QtCore import Qt, QUrl, QSize, QObject, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QPainter, QColor, QBrush
 
 
 STYLESHEET = """
@@ -90,6 +91,71 @@ STYLESHEET = """
         color: #444;
     }
 """
+
+
+class SegmentBar(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(12)
+        # Use transparent background for the widget itself, so only the drawn rectangles show
+        # or a very subtle background for the track
+        self.setAutoFillBackground(False)
+        self.segments = []
+        self.duration = 0
+        self.colors = [
+            QColor(255, 0, 0, 100),    # Red
+            QColor(0, 255, 0, 100),    # Green
+            QColor(0, 0, 255, 100),    # Blue
+            QColor(255, 255, 0, 100),  # Yellow
+            QColor(255, 0, 255, 100),  # Magenta
+            QColor(0, 255, 255, 100),  # Cyan
+            QColor(255, 128, 0, 100),  # Orange
+            QColor(128, 0, 255, 100),  # Purple
+        ]
+
+    def set_data(self, segments, duration):
+        self.segments = segments
+        self.duration = duration
+        self.update()  # Trigger repaint
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        
+        # Draw background track
+        painter.fillRect(self.rect(), QColor(60, 60, 60))
+
+        if not self.duration or self.duration <= 0:
+            return
+
+        width = self.width()
+
+        for i, segment in enumerate(self.segments):
+            start = segment.get('start', 0)
+            stop = segment.get('stop')
+            
+            # If segment is currently recording (stop is None), skip visualizing for now
+            if stop is None:
+                continue
+            
+            # Clamp values to duration
+            curr_start = max(0, min(start, self.duration))
+            curr_stop = max(0, min(stop, self.duration))
+            
+            if curr_start >= curr_stop:
+                continue
+
+            start_x = int((curr_start / self.duration) * width)
+            stop_x = int((curr_stop / self.duration) * width)
+            seg_width = stop_x - start_x
+            if seg_width < 1:
+                seg_width = 1  # Minimum width to be visible
+            
+            # Pick color based on index
+            color = self.colors[i % len(self.colors)]
+            
+            # Draw segment
+            painter.fillRect(start_x, 0, seg_width, self.height(), color)
 
 
 class ExportWorker(QObject):
@@ -227,6 +293,10 @@ class VideoEditor(QMainWindow):
         bar_layout.setContentsMargins(16, 10, 16, 10)
         bar_layout.setSpacing(8)
 
+        # Timeline visualization bar
+        self.segment_bar = SegmentBar()
+        bar_layout.addWidget(self.segment_bar)
+
         # Time slider
         self.time_slider = QSlider(Qt.Horizontal)
         self.time_slider.sliderPressed.connect(self._on_slider_pressed)
@@ -356,7 +426,12 @@ class VideoEditor(QMainWindow):
                             if target_pos > 0:
                                 # We need to delay setting position slightly to ensure media is loaded
                                 QTimer.singleShot(500, lambda: self.media_player.setPosition(target_pos))
-                            
+                        
+                        # Update bar with loaded segments
+                        # Duration might not be known yet (media loading async), but set_data stores it.
+                        # The subsequent durationChanged signal will also update it properly.
+                        self.segment_bar.set_data(self.segments, self.media_player.duration())
+
                     except Exception as e:
                         QMessageBox.warning(self, "Load Error", "Failed to load splits: " + str(e))
     
@@ -386,10 +461,17 @@ class VideoEditor(QMainWindow):
         if not self._scrubbing:
             self.time_slider.setValue(position)
         self.update_time_label(position, self.media_player.duration())
+        
+        # Update segment bar continuously to show current recording progress?
+        # User said "already made splits", but visualizing the active one is nice.
+        # But if we only want "already made", we don't need continuous updates, just on segment creation.
+        # However, to be robust, let's update whenever segments or duration changes.
     
     def duration_changed(self, duration):
         self.time_slider.setRange(0, duration)
-    
+        self.segment_bar.set_data(self.segments, duration)
+        self.segment_bar.update()
+
     def update_time_label(self, position, duration):
         self.time_label.setText(
             "{} / {}".format(self.format_time(position), self.format_time(duration))
@@ -429,6 +511,9 @@ class VideoEditor(QMainWindow):
         self._close_current_segment(current_time)
         self.is_recording = False
         self._update_button_state()
+
+        # Update visual bar
+        self.segment_bar.set_data(self.segments, self.media_player.duration())
 
         # Save progress after every stop action
         self.save_state()
