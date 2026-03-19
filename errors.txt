@@ -1,0 +1,41 @@
+/usr/bin/python3 /home/sbanks/sandbox/sarah_editor/editor.py
+Media status changed to: 2
+Media status changed to: 3
+Frame rate not found in metadata, using 30 fps default
+Media status changed to: 6
+Loaded 5 segments from backup.
+QWidget::paintEngine: Should no longer be called
+QWidget::paintEngine: Should no longer be called
+QWidget::paintEngine: Should no longer be called
+QWidget::paintEngine: Should no longer be called
+Saved splits backup to /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat_splits.json
+FFmpeg Error for clip 1:
+Command: ffmpeg -hide_banner -loglevel error -nostdin -y -ss 0.0 -i /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat.mp4 -t 120.587 -map 0 -c copy /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat_clips/11_3_26_concat_cut_01.mp4
+Error output:
+[mp4 @ 0x55d5d0924880] Could not find tag for codec none in stream #2, codec not currently supported in container
+Could not write header for output file #0 (incorrect codec parameters ?): Invalid argument
+Clip 1 failed (Could not write header for output file #0 (incorrect codec parameters ?): Invalid argument)
+FFmpeg Error for clip 2:
+Command: ffmpeg -hide_banner -loglevel error -nostdin -y -ss 291.287 -i /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat.mp4 -t 57.94400000000002 -map 0 -c copy /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat_clips/11_3_26_concat_cut_02.mp4
+Error output:
+[mp4 @ 0x5606d6284880] Could not find tag for codec none in stream #2, codec not currently supported in container
+Could not write header for output file #0 (incorrect codec parameters ?): Invalid argument
+Clip 2 failed (Could not write header for output file #0 (incorrect codec parameters ?): Invalid argument)
+FFmpeg Error for clip 3:
+Command: ffmpeg -hide_banner -loglevel error -nostdin -y -ss 321.042 -i /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat.mp4 -t 64.209 -map 0 -c copy /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat_clips/11_3_26_concat_cut_03.mp4
+Error output:
+[mp4 @ 0x5604ea5d8880] Could not find tag for codec none in stream #2, codec not currently supported in container
+Could not write header for output file #0 (incorrect codec parameters ?): Invalid argument
+Clip 3 failed (Could not write header for output file #0 (incorrect codec parameters ?): Invalid argument)
+FFmpeg Error for clip 4:
+Command: ffmpeg -hide_banner -loglevel error -nostdin -y -ss 394.647 -i /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat.mp4 -t 84.56700000000001 -map 0 -c copy /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat_clips/11_3_26_concat_cut_04.mp4
+Error output:
+[mp4 @ 0x55b762aad880] Could not find tag for codec none in stream #2, codec not currently supported in container
+Could not write header for output file #0 (incorrect codec parameters ?): Invalid argument
+Clip 4 failed (Could not write header for output file #0 (incorrect codec parameters ?): Invalid argument)
+FFmpeg Error for clip 5:
+Command: ffmpeg -hide_banner -loglevel error -nostdin -y -ss 0.0 -i /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat.mp4 -t 120.0 -map 0 -c copy /media/sbanks/T7/leg_suture_data/leg_suture_data_3.0/11_3_26/concat_video/11_3_26_concat_clips/11_3_26_concat_cut_05.mp4
+Error output:
+[mp4 @ 0x56408bee1880] Could not find tag for codec none in stream #2, codec not currently supported in container
+Could not write header for output file #0 (incorrect codec parameters ?): Invalid argument
+Clip 5 failed (Could not write header for output file #0 (incorrect codec parameters ?): Invalid argument)
