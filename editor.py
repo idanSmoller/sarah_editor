@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QProgressDialog)
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
-from PyQt5.QtCore import Qt, QUrl, QSize, QObject, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QUrl, QSize, QObject, QThread, pyqtSignal, QTimer
 
 
 STYLESHEET = """
@@ -190,6 +190,7 @@ class VideoEditor(QMainWindow):
         self._progress_dialog = None
         self._allow_close = False
         self._close_after_export = False
+        self.immediate_export = False  # If True, skip showing UI and export immediately
 
         self.setStyleSheet(STYLESHEET)
 
@@ -324,6 +325,13 @@ class VideoEditor(QMainWindow):
                         with open(json_path, 'r') as f:
                             self.segments = json.load(f)
                         print("Loaded {} segments from backup.".format(len(self.segments)))
+
+                        # Proceed immediately to export
+                        self.immediate_export = True
+                        self._close_after_export = True
+                        
+                        # Use QTimer to ensure the export call is made after the constructor finishes
+                        QTimer.singleShot(0, lambda: self._start_export(self.segments))
                     except Exception as e:
                         QMessageBox.warning(self, "Load Error", "Failed to load splits: " + str(e))
     
@@ -521,12 +529,17 @@ class VideoEditor(QMainWindow):
 
         self.media_player.pause()
         self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        
+        # Hide the main editor window during export
+        self.hide()
 
-        self._progress_dialog = QProgressDialog("Exporting clips...", "Cancel", 0, len(complete_segments), self)
+        # Use None as parent to ensure visibility independent of the hidden main window
+        self._progress_dialog = QProgressDialog("Exporting clips...", "Cancel", 0, len(complete_segments), None)
         self._progress_dialog.setWindowTitle("Export")
         self._progress_dialog.setWindowModality(Qt.ApplicationModal)
         self._progress_dialog.setMinimumDuration(0)
         self._progress_dialog.setValue(0)
+        self._progress_dialog.show()
 
         self._export_thread = QThread(self)
         self._export_worker = ExportWorker(video_path, output_dir, complete_segments)
@@ -617,7 +630,15 @@ def main():
 
     app = QApplication(sys.argv)
     editor = VideoEditor()
-    editor.show()
+
+    if not editor.immediate_export:
+        editor.show()
+    else:
+        # If immediate export fails to start (e.g. video file selection canceled which shouldn't happen here
+        # but if load_video failed or _start_export check failed), user might be stuck.
+        # But QTimer fires after exec_ starts.
+        pass
+
     sys.exit(app.exec_())
 
 
