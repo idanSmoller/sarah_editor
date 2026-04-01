@@ -128,11 +128,12 @@ class CustomSlider(QSlider):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.recording_start_pos = None
+        self.recording_midpoint_pos = None
 
     def paintEvent(self, event):
         super().paintEvent(event)
         
-        if self.recording_start_pos is not None and self.maximum() > 0:
+        if (self.recording_start_pos is not None or self.recording_midpoint_pos is not None) and self.maximum() > 0:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
             
@@ -140,18 +141,25 @@ class CustomSlider(QSlider):
             self.initStyleOption(opt)
             groove_rect = self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self)
             
-            # Sub-control SC_SliderHandle gives exact handle dimensions, but calculating center relies on slider ratio
-            ratio = self.recording_start_pos / self.maximum()
-            
-            # The usable width for the center of the handle is grove_rect.width() minus handle width, mapped
-            # Approximate center of the handle at value
-            cx = groove_rect.left() + 7 + int(ratio * (groove_rect.width() - 14))
-            cy = groove_rect.center().y()
-            
-            painter.setBrush(QColor(255, 255, 0))  # yellow
-            painter.setPen(Qt.NoPen)
             radius = 7
-            painter.drawEllipse(cx - radius, cy - radius, radius * 2, radius * 2)
+
+            if self.recording_start_pos is not None:
+                ratio = self.recording_start_pos / self.maximum()
+                cx = groove_rect.left() + 7 + int(ratio * (groove_rect.width() - 14))
+                cy = groove_rect.center().y()
+                
+                painter.setBrush(QColor(255, 255, 0))  # yellow
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(cx - radius, cy - radius, radius * 2, radius * 2)
+                
+            if self.recording_midpoint_pos is not None:
+                ratio = self.recording_midpoint_pos / self.maximum()
+                cx = groove_rect.left() + 7 + int(ratio * (groove_rect.width() - 14))
+                cy = groove_rect.center().y()
+                
+                painter.setBrush(QColor(255, 0, 0))  # red
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(cx - radius, cy - radius, radius * 2, radius * 2)
 
 class SegmentBar(QWidget):
     """
@@ -772,8 +780,10 @@ class VideoEditor(QMainWindow):
         # Update the custom slider's visual marker
         if self.is_recording and len(self.segments) > 0 and self.segments[-1].get("stop") is None:
             self.time_slider.recording_start_pos = self.segments[-1]["start"]
+            self.time_slider.recording_midpoint_pos = self.segments[-1].get("midpoint")
         else:
             self.time_slider.recording_start_pos = None
+            self.time_slider.recording_midpoint_pos = None
         self.time_slider.update()
 
     def _get_current_exact_time(self):
@@ -838,6 +848,7 @@ class VideoEditor(QMainWindow):
             if segment.get("stop") is None:
                 segment["midpoint"] = current_time
                 print("Midpoint added at {}".format(self.format_time(current_time)))
+                self._update_button_state() # Update so the slider red pin knows to draw its midpoint
                 self.segment_bar.set_data(self.segments, self.media_player.duration())
                 self.save_state()
                 return
