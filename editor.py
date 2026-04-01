@@ -9,12 +9,23 @@ from pathlib import Path
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QSlider, QFileDialog,
                              QLabel, QStyle, QSizePolicy, QMessageBox,
-                             QProgressDialog)
+                             QProgressDialog, QScrollArea)
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 from PyQt5.QtCore import Qt, QUrl, QSize, QObject, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QPainter, QColor, QBrush
 
+
+SEGMENT_COLORS = [
+    QColor(255, 0, 0, 100),    # Red
+    QColor(0, 255, 0, 100),    # Green
+    QColor(0, 0, 255, 100),    # Blue
+    QColor(255, 255, 0, 100),  # Yellow
+    QColor(255, 0, 255, 100),  # Magenta
+    QColor(0, 255, 255, 100),  # Cyan
+    QColor(255, 128, 0, 100),  # Orange
+    QColor(128, 0, 255, 100),  # Purple
+]
 
 STYLESHEET = """
     QMainWindow, QWidget {
@@ -88,6 +99,17 @@ STYLESHEET = """
         border-color: #555555;
     }
     QPushButton#undo_button:hover { background-color: #666666; }
+    QPushButton#clip_button {
+        text-align: left;
+        padding: 8px 12px;
+        margin: 2px 0px;
+        border: 1px solid #444;
+        background-color: #2a2a2a;
+    }
+    QPushButton#clip_button:hover {
+        background-color: #333333;
+        border-color: #666;
+    }
     QLabel#time_label {
         color: #aaaaaa;
         font-size: 12px;
@@ -95,40 +117,102 @@ STYLESHEET = """
     QFrame#divider {
         color: #444;
     }
+    QScrollArea {
+        border: none;
+        background-color: #252525;
+    }
 """
 
 
 class SegmentBar(QWidget):
+    """
+    Visual representation of video clips on 3 stacked horizontal bars.
+
+    Automatically detects overlapping clips and distributes them across
+    the 3 layers to minimize visual overlap. Colors cycle through the
+    SEGMENT_COLORS array.
+    """
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(12)
-        # Use transparent background for the widget itself, so only the drawn rectangles show
-        # or a very subtle background for the track
+        self.num_layers = 3
+        self.layer_height = 12
+        self.setFixedHeight(self.num_layers * self.layer_height)
         self.setAutoFillBackground(False)
         self.segments = []
         self.duration = 0
-        self.colors = [
-            QColor(255, 0, 0, 100),    # Red
-            QColor(0, 255, 0, 100),    # Green
-            QColor(0, 0, 255, 100),    # Blue
-            QColor(255, 255, 0, 100),  # Yellow
-            QColor(255, 0, 255, 100),  # Magenta
-            QColor(0, 255, 255, 100),  # Cyan
-            QColor(255, 128, 0, 100),  # Orange
-            QColor(128, 0, 255, 100),  # Purple
-        ]
+        self.layer_assignment = {}  # Maps segment index to layer number
+        self.colors = SEGMENT_COLORS
+
+    def _assign_segments_to_layers(self):
+        """Assign each segment to a layer (0-2), avoiding overlaps when possible."""
+        self.layer_assignment = {}
+
+        # For each segment, find which layer to assign it to
+        for i, segment in enumerate(self.segments):
+            stop = segment.get('stop')
+
+            # Skip segments that are currently recording
+            if stop is None:
+                continue
+
+            start = segment.get('start', 0)
+            curr_start = max(0, min(start, self.duration))
+            curr_stop = max(0, min(stop, self.duration))
+
+            if curr_start >= curr_stop:
+                continue
+
+            # Try to find a layer with no overlap
+            assigned = False
+            for layer in range(self.num_layers):
+                has_overlap = False
+                # Check if this segment overlaps with any existing segment on this layer
+                for j, other_segment in enumerate(self.segments):
+                    if j >= i:
+                        break  # Only check previously assigned segments
+
+                    if self.layer_assignment.get(j) != layer:
+                        continue
+
+                    other_stop = other_segment.get('stop')
+                    if other_stop is None:
+                        continue
+
+                    other_start = other_segment.get('start', 0)
+                    other_start = max(0, min(other_start, self.duration))
+                    other_stop = max(0, min(other_stop, self.duration))
+
+                    # Check for overlap
+                    if not (curr_stop <= other_start or curr_start >= other_stop):
+                        has_overlap = True
+                        break
+
+                if not has_overlap:
+                    self.layer_assignment[i] = layer
+                    assigned = True
+                    break
+
+            # If no layer without overlap, assign to layer 0 (just stack them)
+            if not assigned:
+                self.layer_assignment[i] = 0
 
     def set_data(self, segments, duration):
+        """Update segments and video duration, then redraw."""
         self.segments = segments
         self.duration = duration
+        self._assign_segments_to_layers()
         self.update()  # Trigger repaint
 
     def paintEvent(self, event):
+        """Draw the segment bar with clips distributed across layers."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, False)
-        
-        # Draw background track
-        painter.fillRect(self.rect(), QColor(60, 60, 60))
+
+        # Draw background for each layer
+        for layer in range(self.num_layers):
+            y_offset = layer * self.layer_height
+            painter.fillRect(0, y_offset, self.width(), self.layer_height, QColor(60, 60, 60))
 
         if not self.duration or self.duration <= 0:
             return
@@ -138,15 +222,15 @@ class SegmentBar(QWidget):
         for i, segment in enumerate(self.segments):
             start = segment.get('start', 0)
             stop = segment.get('stop')
-            
-            # If segment is currently recording (stop is None), skip visualizing for now
+
+            # If segment is currently recording (stop is None), skip visualizing
             if stop is None:
                 continue
-            
+
             # Clamp values to duration
             curr_start = max(0, min(start, self.duration))
             curr_stop = max(0, min(stop, self.duration))
-            
+
             if curr_start >= curr_stop:
                 continue
 
@@ -155,12 +239,16 @@ class SegmentBar(QWidget):
             seg_width = stop_x - start_x
             if seg_width < 1:
                 seg_width = 1  # Minimum width to be visible
-            
+
+            # Get assigned layer
+            layer = self.layer_assignment.get(i, 0)
+            y_offset = layer * self.layer_height
+
             # Pick color based on index
             color = self.colors[i % len(self.colors)]
-            
+
             # Draw segment
-            painter.fillRect(start_x, 0, seg_width, self.height(), color)
+            painter.fillRect(start_x, y_offset, seg_width, self.layer_height, color)
 
 
 class ExportWorker(QObject):
@@ -259,7 +347,8 @@ class VideoEditor(QMainWindow):
         # Data storage
         self.segments = []
         self.video_path = None
-        self.frame_ms = int(1000 / 30)  # default; updated once video metadata loads
+        self.frame_ms = 1000.0 / 30.0  # default; updated once video metadata loads
+        self.exact_position = 0.0
         self._scrubbing = False  # True while the user is dragging the slider
         self._export_thread = None
         self._export_worker = None
@@ -272,6 +361,9 @@ class VideoEditor(QMainWindow):
 
         # Setup UI
         self.setup_ui()
+
+        # Install event filter to capture key events globally
+        QApplication.instance().installEventFilter(self)
 
         # Load video file
         self.load_video()
@@ -367,6 +459,34 @@ class VideoEditor(QMainWindow):
         bar_layout.addLayout(row)
         layout.addWidget(control_bar)
 
+        # ── Clips Menu ──────────────────────────────────────────────────────────
+        clips_section = QWidget()
+        clips_section.setStyleSheet("background-color: #252525;")
+        clips_section.setMaximumHeight(180)
+        clips_layout = QVBoxLayout(clips_section)
+        clips_layout.setContentsMargins(16, 10, 16, 10)
+        clips_layout.setSpacing(8)
+
+        clips_label = QLabel("Clips:")
+        clips_label.setStyleSheet("color: #aaaaaa; font-weight: bold;")
+        clips_layout.addWidget(clips_label)
+
+        self.clips_scroll = QScrollArea()
+        self.clips_scroll.setWidgetResizable(True)
+        self.clips_scroll.setStyleSheet("background-color: #252525; border: none;")
+
+        self.clips_container = QWidget()
+        self.clips_container.setStyleSheet("background-color: #252525;")
+        self.clips_container_layout = QVBoxLayout(self.clips_container)
+        self.clips_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.clips_container_layout.setSpacing(2)
+
+        self.clips_container_layout.addStretch()
+        self.clips_scroll.setWidget(self.clips_container)
+        clips_layout.addWidget(self.clips_scroll)
+
+        layout.addWidget(clips_section)
+
         # Initial state: not recording → show only Start
         self.is_recording = False
         self._update_button_state()
@@ -449,6 +569,7 @@ class VideoEditor(QMainWindow):
                         # Duration might not be known yet (media loading async), but set_data stores it.
                         # The subsequent durationChanged signal will also update it properly.
                         self.segment_bar.set_data(self.segments, self.media_player.duration())
+                        self.update_clips_list()
 
                     except Exception as e:
                         QMessageBox.warning(self, "Load Error", "Failed to load splits: " + str(e))
@@ -476,9 +597,14 @@ class VideoEditor(QMainWindow):
         self.media_player.setPosition(position)
     
     def position_changed(self, position):
-        if not self._scrubbing:
+        # Ignore position updates from the media player while paused or scrubbing.
+        # This prevents the slider from snapping to keyframes instead of exact frames.
+        if not self._scrubbing and self.media_player.state() == QMediaPlayer.PlayingState:
             self.time_slider.setValue(position)
-        self.update_time_label(position, self.media_player.duration())
+        
+        # When paused, trust the slider value as the exact intended frame.
+        current_display = position if self.media_player.state() == QMediaPlayer.PlayingState else self.time_slider.value()
+        self.update_time_label(current_display, self.media_player.duration())
         
         # Update segment bar continuously to show current recording progress?
         # User said "already made splits", but visualizing the active one is nice.
@@ -496,10 +622,12 @@ class VideoEditor(QMainWindow):
         )
 
     def format_time(self, milliseconds):
+        milliseconds = int(milliseconds)
         seconds = milliseconds // 1000
+        ms = milliseconds % 1000
         minutes = seconds // 60
         seconds = seconds % 60
-        return "{:02d}:{:02d}".format(minutes, seconds)
+        return "{:02d}:{:02d}.{:03d}".format(minutes, seconds, ms)
 
     def format_time_hms(self, milliseconds):
         """Format milliseconds as H:MM:SS for Google Sheets."""
@@ -508,16 +636,86 @@ class VideoEditor(QMainWindow):
         minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60
         return "{:d}:{:02d}:{:02d}".format(hours, minutes, seconds)
-    
+
+    def update_clips_list(self):
+        """Rebuild the clips list UI based on current segments."""
+        # Clear existing buttons
+        while self.clips_container_layout.count() > 1:
+            widget = self.clips_container_layout.takeAt(0)
+            if widget.widget():
+                widget.widget().deleteLater()
+
+        # Add button for each completed segment
+        for i, segment in enumerate(self.segments):
+            if segment.get("stop") is not None:  # Only show completed segments
+                start = segment["start"]
+                stop = segment["stop"]
+                duration = stop - start
+                clip_text = "Clip {}: {} - {} ({})".format(
+                    i + 1,
+                    self.format_time(start),
+                    self.format_time(stop),
+                    self.format_time(duration)
+                )
+
+                clip_button = QPushButton(clip_text)
+                clip_button.setObjectName("clip_button")
+                clip_button.setFixedHeight(32)
+
+                # Get the color for this clip (same color as in segment bar)
+                color = SEGMENT_COLORS[i % len(SEGMENT_COLORS)]
+                # Convert to opaque RGB for button background
+                rgb_color = QColor(color.red(), color.green(), color.blue())
+                hex_color = rgb_color.name()
+
+                # Apply color to button background
+                clip_button.setStyleSheet("""
+                    QPushButton#clip_button {{
+                        background-color: {color};
+                        color: #ffffff;
+                        border: 1px solid #555;
+                        border-radius: 4px;
+                        padding: 6px 12px;
+                        text-align: left;
+                        font-size: 12px;
+                    }}
+                    QPushButton#clip_button:hover {{
+                        background-color: {color_hover};
+                        border-color: #888;
+                    }}
+                """.format(
+                    color=hex_color,
+                    color_hover=rgb_color.lighter(120).name()
+                ))
+
+                clip_button.clicked.connect(lambda checked, pos=start: self.jump_to_clip(pos))
+
+                self.clips_container_layout.insertWidget(
+                    self.clips_container_layout.count() - 1, clip_button
+                )
+
+    def jump_to_clip(self, position):
+        self.exact_position = float(position)
+        new_pos = int(position)
+        self.time_slider.setValue(new_pos)
+        self.media_player.setPosition(new_pos)
+        self.update_time_label(new_pos, self.media_player.duration())
+
     def _update_button_state(self):
         """Show Start XOR (Stop and Start + Stop) depending on recording state."""
         self.start_button.setVisible(not self.is_recording)
         self.stop_and_start_button.setVisible(self.is_recording)
         self.stop_button.setVisible(self.is_recording)
 
+    def _get_current_exact_time(self):
+        """Get the exact time based on playback state or slider value if paused/scrubbing."""
+        if self.media_player.state() == QMediaPlayer.PlayingState:
+            return self.media_player.position()
+        return self.time_slider.value()
+
     def on_start(self):
         """Begin a new segment at the current position."""
-        current_time = self.media_player.position()
+        current_time = self._get_current_exact_time()
         self.segments.append({"start": current_time, "stop": None})
         self.is_recording = True
         self._update_button_state()
@@ -525,13 +723,14 @@ class VideoEditor(QMainWindow):
 
     def on_stop(self):
         """Close the current segment — switches back to Start button."""
-        current_time = self.media_player.position()
+        current_time = self._get_current_exact_time()
         self._close_current_segment(current_time)
         self.is_recording = False
         self._update_button_state()
 
         # Update visual bar
         self.segment_bar.set_data(self.segments, self.media_player.duration())
+        self.update_clips_list()
 
         # Save progress after every stop action
         self.save_state()
@@ -543,7 +742,7 @@ class VideoEditor(QMainWindow):
             return
 
         last_seg = self.segments.pop()
-        
+
         if last_seg.get("stop") is None:
             # We were recording, so we cancel the start
             print("Undo: Cancelled current recording starting at {}".format(self.format_time(last_seg["start"])))
@@ -556,16 +755,19 @@ class VideoEditor(QMainWindow):
 
         self._update_button_state()
         self.segment_bar.set_data(self.segments, self.media_player.duration())
+        self.update_clips_list()
         self.save_state()
 
 
     def on_stop_and_start(self):
         """Close the current segment and immediately open a new one."""
-        current_time = self.media_player.position()
+        current_time = self._get_current_exact_time()
         self._close_current_segment(current_time)
         self.segments.append({"start": current_time, "stop": None})
         print("New start point added at {}".format(self.format_time(current_time)))
         # Stays in recording state — buttons don't change
+        self.segment_bar.set_data(self.segments, self.media_player.duration())
+        self.update_clips_list()
 
     def _close_current_segment(self, current_time):
         """Attach a stop time to the most recent open segment."""
@@ -585,32 +787,47 @@ class VideoEditor(QMainWindow):
         if status == QMediaPlayer.LoadedMedia:
             fps = self.media_player.metaData("VideoFrameRate")
             if fps and fps > 0:
-                self.frame_ms = int(1000 / fps)
+                self.frame_ms = 1000.0 / fps
                 print("Detected frame rate: {:.2f} fps ({} ms/frame)".format(fps, self.frame_ms))
             else:
                 print("Frame rate not found in metadata, using 30 fps default")
+                self.frame_ms = 1000.0 / 30.0
+
+            self.exact_position = 0.0
 
             # Play then immediately pause so the first frame is rendered
             self.media_player.play()
             self.media_player.pause()
             self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
 
-    def keyPressEvent(self, event):
-        """Left/right arrow keys step one frame backward/forward."""
-        if event.key() == Qt.Key_Right:
-            self.media_player.pause()
-            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-            self.media_player.setPosition(
-                min(self.media_player.position() + self.frame_ms, self.media_player.duration())
-            )
-        elif event.key() == Qt.Key_Left:
-            self.media_player.pause()
-            self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-            self.media_player.setPosition(
-                max(self.media_player.position() - self.frame_ms, 0)
-            )
-        else:
-            super(VideoEditor, self).keyPressEvent(event)
+    def eventFilter(self, obj, event):
+        """Capture key events globally to handle arrow keys."""
+        if event.type() == 6:  # QEvent.KeyPress
+            if event.key() == Qt.Key_Right:
+                self.media_player.pause()
+                self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+                # Sync exact_position if we moved the slider manually
+                if not hasattr(self, 'exact_position') or abs(self.exact_position - self.time_slider.value()) > self.frame_ms:
+                    self.exact_position = float(self.time_slider.value())
+                self.exact_position = min(self.exact_position + self.frame_ms, float(self.media_player.duration()))
+                new_pos = int(round(self.exact_position))
+                self.time_slider.setValue(new_pos)
+                self.media_player.setPosition(new_pos)
+                self.update_time_label(new_pos, self.media_player.duration())
+                return True
+            elif event.key() == Qt.Key_Left:
+                self.media_player.pause()
+                self.play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+                if not hasattr(self, 'exact_position') or abs(self.exact_position - self.time_slider.value()) > self.frame_ms:
+                    self.exact_position = float(self.time_slider.value())
+                self.exact_position = max(self.exact_position - self.frame_ms, 0.0)
+                new_pos = int(round(self.exact_position))
+                self.time_slider.setValue(new_pos)
+                self.media_player.setPosition(new_pos)
+                self.update_time_label(new_pos, self.media_player.duration())
+                return True
+        return super().eventFilter(obj, event)
+
 
     def save_state(self):
         if not self.video_path:
