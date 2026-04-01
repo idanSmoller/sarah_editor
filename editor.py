@@ -826,6 +826,12 @@ class VideoEditor(QMainWindow):
                 self.media_player.setPosition(new_pos)
                 self.update_time_label(new_pos, self.media_player.duration())
                 return True
+            elif event.key() == Qt.Key_S:
+                if self.is_recording:
+                    self.on_stop()
+                else:
+                    self.on_start()
+                return True
         return super().eventFilter(obj, event)
 
 
