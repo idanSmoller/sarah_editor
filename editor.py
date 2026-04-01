@@ -82,12 +82,12 @@ STYLESHEET = """
         font-weight: bold;
     }
     QPushButton#start_button:hover { background-color: #1a9e1a; }
-    QPushButton#stop_and_start_button {
-        background-color: #ca5010;
-        border-color: #ca5010;
+    QPushButton#midpoint_button {
+        background-color: #0078d4;
+        border-color: #0078d4;
         font-weight: bold;
     }
-    QPushButton#stop_and_start_button:hover { background-color: #e05a12; }
+    QPushButton#midpoint_button:hover { background-color: #1a8fe3; }
     QPushButton#stop_button {
         background-color: #c42b1c;
         border-color: #c42b1c;
@@ -279,6 +279,18 @@ class SegmentBar(QWidget):
             # Draw segment
             painter.fillRect(start_x, y_offset, seg_width, self.layer_height, color)
 
+            # Draw midpoint if it exists
+            midpoint = segment.get('midpoint')
+            if midpoint is not None:
+                curr_mid = max(0, min(midpoint, self.duration))
+                if curr_start <= curr_mid <= curr_stop:
+                    mid_x = int((curr_mid / self.duration) * width)
+                    # Draw an opposite/complementary color tick that is fully opaque
+                    opposite_color = QColor(255 - color.red(), 255 - color.green(), 255 - color.blue(), 255)
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(opposite_color)
+                    painter.drawRect(mid_x - 1, y_offset, 3, self.layer_height)
+
 
 class ExportWorker(QObject):
     progress = pyqtSignal(int, int, str)
@@ -464,11 +476,12 @@ class VideoEditor(QMainWindow):
         self.start_button.clicked.connect(self.on_start)
         row.addWidget(self.start_button)
 
-        self.stop_and_start_button = QPushButton(u"\u23ed  Stop & Start")
-        self.stop_and_start_button.setObjectName("stop_and_start_button")
-        self.stop_and_start_button.setFixedHeight(36)
-        self.stop_and_start_button.clicked.connect(self.on_stop_and_start)
-        row.addWidget(self.stop_and_start_button)
+        self.midpoint_button = QPushButton(u"\u25cf  Midpoint")
+        self.midpoint_button.setObjectName("midpoint_button")
+        self.midpoint_button.setFixedHeight(36)
+        self.midpoint_button.clicked.connect(self.on_midpoint)
+        self.midpoint_button.setToolTip("Add a midpoint (Shortcut: M)")
+        row.addWidget(self.midpoint_button)
 
         self.stop_button = QPushButton(u"\u25a0  Stop")
         self.stop_button.setObjectName("stop_button")
@@ -735,7 +748,7 @@ class VideoEditor(QMainWindow):
     def _update_button_state(self):
         """Show Start XOR (Stop and Start + Stop) depending on recording state."""
         self.start_button.setVisible(not self.is_recording)
-        self.stop_and_start_button.setVisible(self.is_recording)
+        self.midpoint_button.setVisible(self.is_recording)
         self.stop_button.setVisible(self.is_recording)
 
         # Update the custom slider's visual marker
@@ -754,7 +767,7 @@ class VideoEditor(QMainWindow):
     def on_start(self):
         """Begin a new segment at the current position."""
         current_time = self._get_current_exact_time()
-        self.segments.append({"start": current_time, "stop": None})
+        self.segments.append({"start": current_time, "stop": None, "midpoint": None})
         self.is_recording = True
         self._update_button_state()
         print("Start point added at {}".format(self.format_time(current_time)))
@@ -797,15 +810,19 @@ class VideoEditor(QMainWindow):
         self.save_state()
 
 
-    def on_stop_and_start(self):
-        """Close the current segment and immediately open a new one."""
+    def on_midpoint(self):
+        """Add a midpoint marker to the current open segment."""
+        if not self.is_recording or not self.segments:
+            return
+            
         current_time = self._get_current_exact_time()
-        self._close_current_segment(current_time)
-        self.segments.append({"start": current_time, "stop": None})
-        print("New start point added at {}".format(self.format_time(current_time)))
-        # Stays in recording state — buttons don't change
-        self._update_button_state()
-        self.segment_bar.set_data(self.segments, self.media_player.duration())
+        for segment in reversed(self.segments):
+            if segment.get("stop") is None:
+                segment["midpoint"] = current_time
+                print("Midpoint added at {}".format(self.format_time(current_time)))
+                self.segment_bar.set_data(self.segments, self.media_player.duration())
+                self.save_state()
+                return
         self.update_clips_list()
 
     def _close_current_segment(self, current_time):
@@ -870,6 +887,10 @@ class VideoEditor(QMainWindow):
                     self.on_stop()
                 else:
                     self.on_start()
+                return True
+            elif event.key() == Qt.Key_M:
+                if self.is_recording:
+                    self.on_midpoint()
                 return True
         return super().eventFilter(obj, event)
 
@@ -976,7 +997,11 @@ class VideoEditor(QMainWindow):
             stop = max(0, min(segment["stop"], duration))
 
             if stop > start:
-                complete_segments.append({"start": start, "stop": stop})
+                complete_segments.append({
+                    "start": start,
+                    "stop": stop,
+                    "midpoint": segment.get("midpoint")
+                })
             else:
                 print("Skipping invalid segment: {} -> {}".format(start, stop))
 
@@ -1050,15 +1075,16 @@ class VideoEditor(QMainWindow):
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 # Header row
-                writer.writerow(["Clip Name", "Start Time", "End Time"])
+                writer.writerow(["Clip Name", "Start Time", "Midpoint", "End Time"])
                 
                 for i, segment in enumerate(complete_segments, start=1):
                     # Replicate filename logic from ExportWorker
                     clip_name = "{}_cut_{:02d}{}".format(video_path.stem, i, video_path.suffix)
                     start_str = self.format_time_hms(segment["start"])
+                    mid_str = self.format_time_hms(segment["midpoint"]) if segment.get("midpoint") is not None else "None"
                     stop_str = self.format_time_hms(segment["stop"])
                     
-                    writer.writerow([clip_name, start_str, stop_str])
+                    writer.writerow([clip_name, start_str, mid_str, stop_str])
             
             print("Saved CSV report to {}".format(csv_path))
         except Exception as e:
