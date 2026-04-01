@@ -732,13 +732,31 @@ class VideoEditor(QMainWindow):
                     color_hover=rgb_color.lighter(120).name()
                 ))
 
-                clip_button.clicked.connect(lambda checked, pos=start: self.jump_to_clip(pos))
+                clip_button.clicked.connect(lambda checked, idx=i: self.jump_to_clip(idx))
 
                 self.clips_container_layout.insertWidget(
                     self.clips_container_layout.count() - 1, clip_button
                 )
 
-    def jump_to_clip(self, position):
+    def jump_to_clip(self, clip_index):
+        if clip_index >= len(self.segments):
+            return
+
+        segment = self.segments[clip_index]
+        start = segment["start"]
+        midpoint = segment.get("midpoint")
+
+        if midpoint is None:
+            position = start
+        else:
+            # Toggle between jumping to start and jumping to midpoint
+            if segment.get("_next_jump") == "midpoint":
+                position = midpoint
+                segment["_next_jump"] = "start"
+            else:
+                position = start
+                segment["_next_jump"] = "midpoint"
+
         self.exact_position = float(position)
         new_pos = int(position)
         self.time_slider.setValue(new_pos)
