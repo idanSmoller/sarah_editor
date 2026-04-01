@@ -9,7 +9,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QSlider, QFileDialog,
                              QLabel, QStyle, QSizePolicy, QMessageBox,
-                             QProgressDialog, QScrollArea)
+                             QProgressDialog, QScrollArea, QStyleOptionSlider)
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 from PyQt5.QtCore import Qt, QUrl, QSize, QObject, QThread, pyqtSignal, QTimer
@@ -123,6 +123,35 @@ STYLESHEET = """
     }
 """
 
+
+class CustomSlider(QSlider):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.recording_start_pos = None
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        
+        if self.recording_start_pos is not None and self.maximum() > 0:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            opt = QStyleOptionSlider()
+            self.initStyleOption(opt)
+            groove_rect = self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self)
+            
+            # Sub-control SC_SliderHandle gives exact handle dimensions, but calculating center relies on slider ratio
+            ratio = self.recording_start_pos / self.maximum()
+            
+            # The usable width for the center of the handle is grove_rect.width() minus handle width, mapped
+            # Approximate center of the handle at value
+            cx = groove_rect.left() + 7 + int(ratio * (groove_rect.width() - 14))
+            cy = groove_rect.center().y()
+            
+            painter.setBrush(QColor(255, 255, 0))  # yellow
+            painter.setPen(Qt.NoPen)
+            radius = 7
+            painter.drawEllipse(cx - radius, cy - radius, radius * 2, radius * 2)
 
 class SegmentBar(QWidget):
     """
@@ -399,7 +428,7 @@ class VideoEditor(QMainWindow):
         bar_layout.addWidget(self.segment_bar)
 
         # Time slider
-        self.time_slider = QSlider(Qt.Horizontal)
+        self.time_slider = CustomSlider(Qt.Horizontal)
         self.time_slider.sliderPressed.connect(self._on_slider_pressed)
         self.time_slider.sliderReleased.connect(self._on_slider_released)
         self.time_slider.sliderMoved.connect(self._on_slider_moved)
@@ -707,6 +736,13 @@ class VideoEditor(QMainWindow):
         self.stop_and_start_button.setVisible(self.is_recording)
         self.stop_button.setVisible(self.is_recording)
 
+        # Update the custom slider's visual marker
+        if self.is_recording and len(self.segments) > 0 and self.segments[-1].get("stop") is None:
+            self.time_slider.recording_start_pos = self.segments[-1]["start"]
+        else:
+            self.time_slider.recording_start_pos = None
+        self.time_slider.update()
+
     def _get_current_exact_time(self):
         """Get the exact time based on playback state or slider value if paused/scrubbing."""
         if self.media_player.state() == QMediaPlayer.PlayingState:
@@ -766,6 +802,7 @@ class VideoEditor(QMainWindow):
         self.segments.append({"start": current_time, "stop": None})
         print("New start point added at {}".format(self.format_time(current_time)))
         # Stays in recording state — buttons don't change
+        self._update_button_state()
         self.segment_bar.set_data(self.segments, self.media_player.duration())
         self.update_clips_list()
 
