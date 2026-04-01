@@ -659,12 +659,14 @@ class VideoEditor(QMainWindow):
         return "{:02d}:{:02d}.{:03d}".format(minutes, seconds, ms)
 
     def format_time_hms(self, milliseconds):
-        """Format milliseconds as H:MM:SS for Google Sheets."""
+        """Format milliseconds as H:MM:SS.SSS for Google Sheets/CSV."""
+        milliseconds = int(milliseconds)
         total_seconds = milliseconds // 1000
+        ms = milliseconds % 1000
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60
-        return "{:d}:{:02d}:{:02d}".format(hours, minutes, seconds)
+        return "{:d}:{:02d}:{:02d}.{:03d}".format(hours, minutes, seconds, ms)
 
     def update_clips_list(self):
         """Rebuild the clips list UI based on current segments."""
@@ -881,7 +883,8 @@ class VideoEditor(QMainWindow):
         }
         
         try:
-            json_path = self.video_path.with_name(self.video_path.stem + "_splits.json")
+            video_p = Path(self.video_path)
+            json_path = video_p.with_name(video_p.stem + "_splits.json")
             with open(json_path, 'w') as f:
                 json.dump(data, f, indent=4)
             print("Saved state to {}".format(json_path))
@@ -895,7 +898,8 @@ class VideoEditor(QMainWindow):
             return
         
         try:
-            json_path = self.video_path.with_name(self.video_path.stem + "_splits.json")
+            video_p = Path(self.video_path)
+            json_path = video_p.with_name(video_p.stem + "_splits.json")
             if json_path.exists():
                 json_path.unlink()
                 print("Deleted state file: {}".format(json_path))
