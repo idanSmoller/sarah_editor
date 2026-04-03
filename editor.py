@@ -719,12 +719,16 @@ class VideoEditor(QMainWindow):
                 # Convert to opaque RGB for button background
                 rgb_color = QColor(color.red(), color.green(), color.blue())
                 hex_color = rgb_color.name()
+                
+                # Determine text color based on background luminance
+                luminance = 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
+                text_color = "#000000" if luminance > 128 else "#ffffff"
 
                 # Apply color to button background
                 clip_button.setStyleSheet("""
                     QPushButton#clip_button {{
                         background-color: {color};
-                        color: #ffffff;
+                        color: {text_color};
                         border: 1px solid #555;
                         border-radius: 4px;
                         padding: 6px 12px;
@@ -737,6 +741,7 @@ class VideoEditor(QMainWindow):
                     }}
                 """.format(
                     color=hex_color,
+                    text_color=text_color,
                     color_hover=rgb_color.lighter(120).name()
                 ))
 
@@ -751,19 +756,19 @@ class VideoEditor(QMainWindow):
             return
 
         segment = self.segments[clip_index]
-        start = segment["start"]
-        midpoint = segment.get("midpoint")
-
-        if midpoint is None:
-            position = start
-        else:
-            # Toggle between jumping to start and jumping to midpoint
-            if segment.get("_next_jump") == "midpoint":
-                position = midpoint
-                segment["_next_jump"] = "start"
-            else:
-                position = start
-                segment["_next_jump"] = "midpoint"
+        
+        targets = [segment.get("start")]
+        if segment.get("midpoint") is not None:
+            targets.append(segment.get("midpoint"))
+        if segment.get("stop") is not None:
+            targets.append(segment.get("stop"))
+            
+        jump_idx = segment.get("_next_jump_idx", 0)
+        if jump_idx >= len(targets):
+            jump_idx = 0
+            
+        position = targets[jump_idx]
+        segment["_next_jump_idx"] = (jump_idx + 1) % len(targets)
 
         self.exact_position = float(position)
         new_pos = int(position)
@@ -1168,8 +1173,9 @@ class VideoEditor(QMainWindow):
                 "All clips exported successfully.\nSaved to:\n{}".format(output_dir)
             )
             # Only delete the state file if export was completely successful and we are closing
-            if self._close_after_export:
-                self.delete_state()
+            # User wants to keep the json file even after export completes successfully
+            # if self._close_after_export:
+            #     self.delete_state()
 
         if self._close_after_export:
             self._allow_close = True
